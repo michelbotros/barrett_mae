@@ -11,12 +11,13 @@ from tqdm import tqdm
 
 class BarrettsTissue(Dataset):
 
-    def __init__(self, tiff_files, tile_size=(256, 256), target_mpp=2, mask_threshold=0.3):
+    def __init__(self, tiff_files, tile_size=(256, 256), target_mpp=2, mask_threshold=0.3, transforms=True):
         self.files = tiff_files
         self.tile_size = tile_size
         self.target_mpp = target_mpp
-
         self.datasets = []
+        self.transforms = transforms
+
         for f in tqdm(tiff_files, desc='Pre-loading WSIs...'):
             slide_image = SlideImage.from_file_path(f)
 
@@ -40,17 +41,23 @@ class BarrettsTissue(Dataset):
         wsi = random.choice(self.datasets)
         tile = random.choice(wsi)['image'].convert('RGB')
 
+        # define standard transforms
         transforms_train = Compose([
-            RandomApply([RandomRotation(90, 90)], p=0.5),
+            RandomApply([RandomRotation((90, 90))], p=0.5),
             RandomHorizontalFlip(p=0.5),
             RandomVerticalFlip(p=0.5),
             ToTensor()
         ])
-        return transforms_train(tile)
+
+        if self.transforms:
+            tile = transforms_train(tile)
+
+        return tile
 
 
 def get_wsi_paths(split_file, partition='training'):
     with open(split_file, 'r') as file:
         split = yaml.safe_load(file)
     paths = [x['wsi']['path'] for x in split[partition]]
+
     return paths
