@@ -1,11 +1,14 @@
 import torch
 from vit_pytorch import ViT, MAE
+
+import lr_sched
 from dataloader import BarrettsTissue
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from dataloader import get_wsi_paths
 import argparse
 from tqdm import tqdm
+from lr_sched import adjust_learning_rate
 
 
 def get_args_parser():
@@ -51,9 +54,7 @@ def get_args_parser():
     parser.add_argument('--betas', type=float, default=(0.9, 0.95),
                         help='betas in AdamW')
 
-    # scheduler parameters TODO (not used yet)
-    parser.add_argument('--blr', type=float, default=1e-3, metavar='LR',
-                        help='base learning rate: absolute_lr = base_lr * total_batch_size / 256')
+    # scheduler parameters: decay with half-cosine after a warmup
     parser.add_argument('--min_lr', type=float, default=0., metavar='LR',
                         help='lower lr bound for cyclic schedulers that hit 0')
     parser.add_argument('--warmup_epochs', type=int, default=40, metavar='N',
@@ -83,7 +84,7 @@ def pretrain(args):
     device = torch.device(args.device)
 
     # get paths to training files
-    tiff_files = get_wsi_paths(args.data_paths, partition='training')[:5]
+    tiff_files = get_wsi_paths(args.data_paths, partition='training')
 
     # create a datasets of Barrett's tissue patches
     dataset = BarrettsTissue(tiff_files=tiff_files, tile_size=(args.input_size, args.input_size), target_mpp=args.target_mpp)
@@ -113,15 +114,20 @@ def pretrain(args):
     optimizer = AdamW(params=mae.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=args.betas)
 
     # pre-train
-    for e in tqdm(range(args.epochs), desc='Epoch'):
+    print('Starting pretraining for {} epochs.'.format(args.epochs))
+    for epoch in tqdm(range(args.epochs), desc='Training'):
         epoch_loss = 0.0
-        for image_batch in tqdm(train_dataloader, desc='Batch', leave=False):
+        for image_batch in train_dataloader:
             loss = mae(image_batch.to(device))
             loss.backward()
             optimizer.step()
             epoch_loss += loss
-        print('Epoch {}, loss: {:.3f}'.format(e, epoch_loss / len(train_dataloader)))
 
+        # per epoch lr scheduler
+        lr_sched.adjust_learning_rate(optimizer, epoch, args)
+        print('Epoch {}, loss: {:.3f}, lr: {}'.format(epoch,
+                                                      epoch_loss / len(train_dataloader),
+                                                      optimizer.param_groups[0]["lr"]))
     # save the pre-trained encoder
     torch.save(v.state_dict(), './trained-encoder.pt')
 
